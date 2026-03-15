@@ -2,13 +2,8 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-
-// We can only use realtime if we have anon key available on client side.
-// Since we want this purely client side and we only have the supabaseAdmin client,
-// let's create a standard supabase client for realtime listening.
 import { createClient } from "@supabase/supabase-js";
 
-// Note: NEVER pass service role key to the client. Realtime listening works with the anon key.
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -36,6 +31,5 @@ export function RealtimeJobs() {
     };
   }, [router]);
 
-  // This is an invisible utility component
   return null;
 }

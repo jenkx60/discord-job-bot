@@ -69,9 +69,6 @@ export function JobsTable({ jobs, isLoading }: JobsTableProps) {
 
   const getJobUrl = (channelId?: string, messageId?: string) => {
     if (channelId && messageId) {
-      // Assuming discord server link or deep link format. We might not have Guild ID here.
-      // E.g., https://discord.com/channels/@me/${channelId}/${messageId}
-      // Or we can just provide a generic link if no guild ID is known.
       return `https://discord.com/channels/@me/${channelId}/${messageId}`;
     }
     return "#";

@@ -79,11 +79,13 @@ DISCORD_CHANNEL_ID=your_default_channel_id
 ## 4. Installation & Run
 
 1. **Install dependencies:**
+
    ```bash
    npm install
    ```
 
 2. **Run the Dashboard (Next.js):**
+
    ```bash
    npm run dev
    ```
