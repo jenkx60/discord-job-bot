@@ -4,11 +4,11 @@ A modern, full-stack application for managing freelance job postings on Discord.
 
 ## Features
 
-- 🚀 **Dashboard**: Post and manage jobs from a sleek web interface.
-- 💬 **Discord Integration**: Automatic posting to specific channels.
-- 🛠️ **Claiming System**: Users react to messages to claim jobs.
-- ⏳ **Expiration Logic**: Automatic job expiration and admin-led reposting.
-- 🔄 **Real-time Updates**: Live dashboard updates via Supabase Realtime.
+- **Dashboard**: Post and manage jobs from a sleek web interface.
+- **Discord Integration**: Automatic posting to specific channels.
+- **Claiming System**: Users react to messages to claim jobs.
+- **Expiration Logic**: Automatic job expiration and admin-led reposting.
+- **Real-time Updates**: Live dashboard updates via Supabase Realtime.
 
 ---
 
