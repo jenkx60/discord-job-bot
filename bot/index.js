@@ -3,6 +3,7 @@ require("dotenv").config()
 const { Client, GatewayIntentBits } = require("discord.js")
 const { createClient } = require("@supabase/supabase-js")
 
+
 const db = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
     process.env.NEXT_SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -18,7 +19,6 @@ const client = new Client({
 })
 
 // Ready
-
 client.once("ready", async () => {
     console.log(`[Bot] Logged in as ${client.user.tag}`)
 
@@ -29,76 +29,52 @@ client.once("ready", async () => {
         return
     }
 
-    channel.send("Bot is fully active")
+    channel.send("**Bot is fully active and monitoring jobs.**")
 })
 
 // Job Claiming via Reaction
-
 client.on("messageReactionAdd", async (reaction, user) => {
     if (user.bot) return
 
-    // Fetch full reaction
-    // if (reaction.partial) {
-    //     try { await reaction.fetch() } catch { return }
-    // }
 
+    // fetch the job record from the database
     const { data: job } = await db
         .from("jobs")
         .select("*")
         .eq("message_id", reaction.message.id)
         .single()
 
-    if (!job) return
-    console.log(`[Bot] Claim attempt on job ${job.id}. Columns available:`, Object.keys(job))
-    if (job.status !== "open") return
-    
-    // Capture the emoji used by the user
-    const claimingEmoji = reaction.emoji.name;
-    
-    // if (job.previous_claimers?.includes(user.id)) {
-    //     console.log(`[Bot] User ${user.username} (${user.id}) blocked — already claimed this job before.`)
-    //     // Do not send notification for previous claimers as per user request
-    //     return
-    // }
+    if (!job || job.status !== "open") return
 
-    // Notify the channel about the reaction
-    try {
-        const channel = await client.channels.fetch(job.channel_id)
-        if (channel) {
-            await channel.send(`this user <@${user.id}> reacted to the message`)
-        }
-    } catch (err) {
-        console.error(`[Bot] Failed to send reaction notification for job ${job.id}:`, err)
-    }
-
-    // The previousClaimers declaration was not duplicated, so it remains.
-    const previousClaimers = [...(job.previous_claimers || []), user.id]
-
-    console.log(`[Bot] Attempting update for job ${job.id}. Assigned User: ${user.username}, ID: ${user.id}`)
-
-    const { error: updateError } = await db
+    // to claim jobs only if status is open
+    const { data, error: updateError } = await db
         .from("jobs")
         .update({
             status: "assigned",
-            assigned_user: user.username, 
-            assigned_user_id: user.id,   
-            previous_claimers: previousClaimers,
-            emoji: claimingEmoji, 
+            assigned_user: user.username,
+            assigned_user_id: user.id,
+            emojis: reaction.emoji.name
         })
         .eq("id", job.id)
+        .eq("status", "open") // this ensures the second reactions from a different users fails the db update
+        .select()
 
-    if (updateError) {
-        console.error(`[Bot] Error assigning job ${job.id}:`, updateError)
-        await reaction.message.reply(`❌ **Error assigning job.** Please contact an admin.`)
+        if (updateError) {
+            console.error(`[Bot] Error assigning job ${job.id}:`, updateError)
         return
-    }
+        }
 
-    await reaction.message.reply(`🚀 **Job Claimed!**\n<@${user.id}> was the first to react and has been assigned to: "${job.description}".`)
-    console.log(`[Bot] Job "${job.description}" assigned to ${user.username} (ID: ${user.id})`)
+        // Only the first user to react will get the job and success message
+        if (data && data.length > 0) {
+            await reaction.message.reply(`🚀 **Job Claimed!**\n<@${user.id}> was the first to react and has been assigned to: "${job.description}".`)
+        } else {
+            await reaction.message.reply(`❌ **Job already claimed.**`)
+        }
 })
 
-// New Job Poller (every 5 seconds)
 
+
+// New Job Poller (every 5 seconds)
 setInterval(async () => {
     // Find open jobs that haven't been posted to Discord yet (message_id is null)
     const { data: jobs } = await db
@@ -117,14 +93,14 @@ setInterval(async () => {
             // Post to Discord
             const now = new Date()
             const expireAt = new Date(job.expire_at)
-            const remainingMins = Math.round((expireAt - now) / 60000)
+            const remainingMins = Math.round((expireAt - now) / 30000)
             
-            console.log(`[Bot] Posting job. Now: ${now.toISOString()}, ExpireAt: ${job.expire_at}, Remaining: ${remainingMins}m`)
+            // console.log(`[Bot] Posting job. Now: ${now.toISOString()}, ExpireAt: ${job.expire_at}, Remaining: ${remainingMins}m`)
 
             const message = await channel.send(
                 `🚀 **New Freelance Job**\n${job.description}\n\nReact with any emoji to claim. Time window: ${remainingMins}m`
             )
-            await message.react(job.emoji)
+            // await message.react(job.emoji)
 
             // Save message ID back to DB
             await db

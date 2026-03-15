@@ -16,7 +16,7 @@ export function JobForm() {
   const [formData, setFormData] = useState({
     description: "",
     reactionEmoji: "👍",
-    timeWindowMinutes: 60,
+    timeWindowMinutes: 30,
     discordChannelId: "",
   });
 
@@ -34,7 +34,7 @@ export function JobForm() {
 
     try {
       // Calculate expiration timestamp
-      const expireAt = new Date(Date.now() + formData.timeWindowMinutes * 60000).toISOString();
+      const expireAt = new Date(Date.now() + formData.timeWindowMinutes * 30000).toISOString();
 
       const res = await fetch("/api/jobs", {
         method: "POST",
@@ -56,7 +56,7 @@ export function JobForm() {
       setFormData({
         description: "",
         reactionEmoji: "👍",
-        timeWindowMinutes: 60,
+        timeWindowMinutes: 30,
         discordChannelId: "",
       });
       router.refresh(); // Refresh the jobs table
