@@ -33,7 +33,8 @@ export async function POST(request) {
             assigned_user_id: null,
             previous_claimers: previousClaimers,
             message_id: null,
-            expire_at: newExpireAt, 
+            expire_at: newExpireAt,
+            shortlisted_users: [], // Reset shortlist for the new posting
         })
         .eq("id", jobId)
 

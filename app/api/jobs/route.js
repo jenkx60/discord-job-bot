@@ -15,6 +15,8 @@ export async function POST(request) {
             status: "open",
             expire_at: expireAt,
             message_id: null, // Will be filled by the bot process after it posts to Discord
+            shortlisted_users: [],
+            shortlist_limit: body.shortlist_limit ?? 10,
         })
         .select()
         .single()

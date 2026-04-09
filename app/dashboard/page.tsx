@@ -24,6 +24,8 @@ export default async function DashboardPage() {
     expirationTime: (row.expire_at ?? row.expires_at) as string | null,
     messageId: row.message_id as string | undefined,
     channelId: row.channel_id as string | undefined,
+    shortlistedUsers: (row.shortlisted_users ?? []) as string[],
+    shortlistLimit: (row.shortlist_limit ?? 10) as number,
   }));
 
   return (

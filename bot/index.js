@@ -1,8 +1,6 @@
-require("dotenv").config()
-
-const { Client, GatewayIntentBits } = require("discord.js")
-const { createClient } = require("@supabase/supabase-js")
-
+import "dotenv/config"
+import { Client, GatewayIntentBits, Partials } from "discord.js"
+import { createClient } from "@supabase/supabase-js"
 
 const db = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -15,63 +13,242 @@ const client = new Client({
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.GuildMessageReactions,
         GatewayIntentBits.MessageContent,
-    ]
+    ],
+    // this tells the bot to pay attention to old messages it forgot about
+    partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
 })
+
+// Per-job queue to prevent race conditions when multiple users react at the same time.
+// Each job ID maps to a Promise chain so reactions are processed one at a time.
+const jobQueues = new Map()
+
+function enqueueForJob(jobId, task) {
+    const current = jobQueues.get(jobId) || Promise.resolve()
+    const next = current.then(task).catch((err) => {
+        console.error(`[Queue] Error processing reaction for job ${jobId}:`, err)
+    })
+    jobQueues.set(jobId, next)
+    // Clean up the queue entry once the chain settles so the Map doesn't grow forever
+    next.finally(() => {
+        if (jobQueues.get(jobId) === next) {
+            jobQueues.delete(jobId)
+        }
+    })
+}
 
 // Ready
 client.once("ready", async () => {
     console.log(`[Bot] Logged in as ${client.user.tag}`)
 
-    const channel = await client.channels.fetch(process.env.DISCORD_CHANNEL_ID)
-
-    if (!channel) {
-        console.log("Channel not found")
+    const channelId = process.env.DISCORD_CHANNEL_ID
+    if (!channelId) {
+        console.error("DISCORD_CHANNEL_ID is not defined in .env")
         return
     }
 
-    channel.send("**Bot is fully active and monitoring jobs.**")
+    try {
+        const channel = await client.channels.fetch(channelId)
+        if (channel) {
+            channel.send("**Bot is fully active and monitoring jobs.**")
+        } else {
+            console.log(`Channel with ID ${channelId} not found`)
+        }
+    } catch (err) {
+        console.error("Failed to fetch channel or send message:", err)
+    }
 })
 
-// Job Claiming via Reaction
+// Shortlist via Reaction
 client.on("messageReactionAdd", async (reaction, user) => {
+    console.log("Reaction added. Am I seeing this?")
+    // If the message is old or partial, we need to fetch it
+    if (reaction.partial) {
+        try {
+            await reaction.fetch()
+        } catch (error) {
+            console.error("Something went wrong when fetching the reaction:", error)
+            return
+        }
+    }
+
+    if (user.partial) {
+        try {
+            await user.fetch()
+        } catch (error) {
+            console.error("Something went wrong when fetching the user:", error)
+            return
+        }
+    }
+
+    console.log(`Reaction Event The reaction was by ${user.tag}`);
+
+    // Ignore bot reactions
     if (user.bot) return
 
+    // TEST: send a message to the channel immediately
+    try {
+        await reaction.message.channel.send(`Reaction added by ${user.tag}`)
+        console.log(`Reaction Event Message sent to channel succesfully`)
+    } catch (error) {
+        console.error("Something went wrong when sending a message to the channel:", error)
+        return
+    }
 
-    // fetch the job record from the database
-    const { data: job } = await db
+    // Fetch job record first (cheap check before entering the queue)
+    const { data: jobCheck } = await db
         .from("jobs")
-        .select("*")
+        .select("id, status, emoji")
         .eq("message_id", reaction.message.id)
         .single()
 
-    if (!job || job.status !== "open") return
+    // if (!jobCheck || jobCheck.status !== "open") return
+    if (!jobCheck) {
+        console.log(`[Reaction] Rejected! This message ID (${reaction.message.id}) does not exisit in the database.`);
+        return;
+    }
 
-    // to claim jobs only if status is open
-    const { data, error: updateError } = await db
-        .from("jobs")
-        .update({
-            status: "assigned",
-            assigned_user: user.username,
-            assigned_user_id: user.id,
-            emojis: reaction.emoji.name
-        })
-        .eq("id", job.id)
-        .eq("status", "open") // this ensures the second reactions from a different users fails the db update
-        .select()
+    if (jobCheck.status !== "open") {
+        console.log(`[Reaction] Rejected! This job's status is currently: "${jobCheck.status}". It must be "open"!`);
+        return;
+    }
+
+    // if we have an expected emoji, ensure the reaction emoji matches
+    if (jobCheck.emoji && reaction.emoji.name !== jobCheck.emoji) {
+        console.log(`[Reaction] Rejected! Expected ${jobCheck.emoji}, got ${reaction.emoji.name}`);
+
+        // automatically delete the wrong reaction to keep the post clean!
+        try {
+            await reaction.users.remove(user.id);
+        } catch (removeError) {
+            console.error("Could not remove invalid reaction:", removeError);
+        }
+
+        return; // stop processing, ignore the reaction completely
+    }
+
+    console.log(`[Reaction] Job is valid and open! Proceeding to save to database...`);
+
+    // Serialise all reactions for this job through a queue
+    enqueueForJob(jobCheck.id, async () => {
+        // Re-fetch the full job inside the queue to get the latest shortlist state
+        const { data: job } = await db
+            .from("jobs")
+            .select("*")
+            .eq("id", jobCheck.id)
+            .single()
+
+        if (!job || job.status !== "open") return
+
+        const shortlistLimit = job.shortlist_limit ?? 10
+        // const shortlistedUsers = Array.isArray(job.shortlisted_users) ? job.shortlisted_users : []
+        let rawUsers = job.shortlisted_users;
+        let shortlistedUsers = [];
+
+        if (Array.isArray(rawUsers)) {
+            shortlistedUsers = rawUsers;
+        } else if (typeof rawUsers === "string" && rawUsers.trim() !== "") {
+            try {
+                const parsed = JSON.parse(rawUsers);
+                shortlistedUsers = Array.isArray(parsed) ? parsed : [rawUsers];
+            } catch (e) {
+                // It's a raw literal string like "jenkins7904"
+                shortlistedUsers = [rawUsers];
+            }
+        }
+
+        const candidateInfo = `${user.tag} (${user.id})`
+
+        //Restriction Check
+        // Fetch all open jobs to see if they are already shortlisted
+        const { data: openJobs } = await db
+            .from("jobs")
+            .select("id, shortlisted_users")
+            .eq("status", "open");
+        
+        if (openJobs) {
+            let isShortlistedElsewhere = false;
+
+            for (const openJob of openJobs) {
+                if (openJob.id === job.id) continue;
+
+                let otherUsers = [];
+                let otherRaw = openJob.shortlisted_users;
+
+                if (Array.isArray(otherRaw)) {
+                    otherUsers = otherRaw;
+                } else if (typeof otherRaw === "string" && otherRaw.trim() !== "") {
+                    try {
+                        const parsed = JSON.parse(otherRaw);
+                        otherUsers = Array.isArray(parsed) ? parsed : [otherRaw];
+                    } catch (e) {
+                        otherUsers = [otherRaw];
+                    }
+                }
+
+                if (otherUsers.includes(candidateInfo)) {
+                    isShortlistedElsewhere = true;
+                    break;
+                }
+            }
+
+            if (isShortlistedElsewhere) {
+                console.log(`[Bot] User ${user.tag} rejected from ${job.id}. Already on another shorlist.`);
+
+                try {
+                    await user.send(
+                        "⚠️ You can only be shortlisted for **one job at a time**. Please wait for the admin to assign you."
+                    );
+                } catch (dmError) {
+                    console.warn(`[Bot] Could not DM user ${user.id}:`, dmError.message);
+                }
+                return;
+            }
+        }
+
+        // Ignore if already shortlisted
+        if (shortlistedUsers.includes(candidateInfo)) {
+            console.log(`[Bot] User ${user.id} already shortlisted for job ${job.id}`)
+
+            // Send the reminder DM
+            try {
+                await user.send("You have already been shortlisted for this job. Please hold on for the admin to contact you.")
+            } catch (dmError) {
+                console.warn(`[Bot] Could not DM user ${user.id} (DMs may be disabled):`, dmError.message)
+            }
+            return
+        }
+
+        // Ignore if shortlist is full
+        if (shortlistedUsers.length >= shortlistLimit) {
+            console.log(`[Bot] Shortlist full for job ${job.id}. Ignoring reaction from ${user.tag}`)
+            return
+        }
+
+        const updatedList = [...shortlistedUsers, candidateInfo]
+        console.log(`[Reaction] Saving this array to the Database:`, updatedList);
+
+        const { error: updateError } = await db
+            .from("jobs")
+            .update({ shortlisted_users: updatedList })
+            .eq("id", job.id)
 
         if (updateError) {
-            console.error(`[Bot] Error assigning job ${job.id}:`, updateError)
-        return
+            console.error(`[Bot] Failed to update shortlist for job ${job.id}:`, updateError)
+            return
         }
 
-        // Only the first user to react will get the job and success message
-        if (data && data.length > 0) {
-            await reaction.message.reply(`🚀 **Job Claimed!**\n<@${user.id}> was the first to react and has been assigned to: "${job.description}".`)
-        } else {
-            await reaction.message.reply(`❌ **Job already claimed.**`)
+        console.log(`[Bot] Shortlisted user ${user.id} for job "${job.description}" (${updatedList.length}/${shortlistLimit})`)
+
+        // Send DM — handle gracefully if user has DMs disabled
+        try {
+            await user.send(
+                "🎉 You have been shortlisted for this job.\n\nThe admin will contact you shortly."
+            )
+        } catch (dmError) {
+            console.warn(`[Bot] Could not DM user ${user.id} (DMs may be disabled):`, dmError.message)
         }
+    })
 })
-
 
 
 // New Job Poller (every 5 seconds)
@@ -90,17 +267,14 @@ setInterval(async () => {
             const channel = await client.channels.fetch(job.channel_id)
             if (!channel) continue
 
-            // Post to Discord
-            const now = new Date()
             const expireAt = new Date(job.expire_at)
-            const remainingMins = Math.round((expireAt - now) / 30000)
-            
-            // console.log(`[Bot] Posting job. Now: ${now.toISOString()}, ExpireAt: ${job.expire_at}, Remaining: ${remainingMins}m`)
+            // const expireStr = job.expire_at.endsWith("Z") ? job.expire_at : `${job.expire_at}Z`;
+            // const expireAt = new Date(expireStr);
+            const unixTimeStamp = Math.floor(expireAt.getTime() / 1000)
 
             const message = await channel.send(
-                `🚀 **New Freelance Job**\n${job.description}\n\nReact with any emoji to claim. Time window: ${remainingMins}m`
+                `🚀 **New Freelance Job**\n${job.description}\n\nReact with ${job.emoji} emoji to express interest. Up to ${job.shortlist_limit ?? 10} candidates will be shortlisted. Opening ends in: <t:${unixTimeStamp}:R>`
             )
-            // await message.react(job.emoji)
 
             // Save message ID back to DB
             await db
@@ -116,7 +290,44 @@ setInterval(async () => {
 }, 5000)
 
 // Expiration Scheduler (every 60 seconds)
+// setInterval(async () => {
+//     const { data: jobs } = await db
+//         .from("jobs")
+//         .select("*")
+//         .eq("status", "open")
 
+//     if (!jobs || jobs.length === 0) return
+
+//     const now = new Date()
+//     for (const job of jobs) {
+//         const expireStr = job.expire_at.endsWith("Z") ? job.expire_at : `${job.expire_at}Z`;
+//         const expireAt = new Date(expireStr);
+
+//         if (expireAt < now) {
+//             await db
+//                 .from("jobs")
+//                 .update({ status: "expired" })
+//                 .eq("id", job.id)
+
+//             console.log(`[Expiry] Job expired: "${job.description}" (id: ${job.id})`)
+
+//             try {
+//                 const channel = await client.channels.fetch(job.channel_id)
+//                 if (channel) {
+//                     const shortlistedUsers = Array.isArray(job.shortlisted_users) ? job.shortlisted_users : []
+//                     await channel.send(
+//                         `⚠️ **Job Expired**\nThe timeframe for "${job.description}" has expired.\n` +
+//                         `${shortlistedUsers.length} candidate(s) were shortlisted. Awaiting admin review.`
+//                     )
+//                 }
+//             } catch (err) {
+//                 console.error(`[Expiry] Failed to notify channel for job ${job.id}:`, err)
+//             }
+//         }
+//     }
+// }, 60000)
+
+// Expiration Scheduler (every 60 seconds)
 setInterval(async () => {
     const { data: jobs } = await db
         .from("jobs")
@@ -127,28 +338,56 @@ setInterval(async () => {
 
     const now = new Date()
     for (const job of jobs) {
-        const expireAt = new Date(job.expire_at)
+        try {
+            // 1. Safe guard against missing dates
+            if (!job.expire_at) {
+                console.warn(`[Expiry] Missing expire_at on Job ID: ${job.id}. Skipping.`);
+                continue;
+            }
+
+            const expireStr = job.expire_at.endsWith("Z") ? job.expire_at : `${job.expire_at}Z`;
+            const expireAt = new Date(expireStr);
+
+            if (expireAt < now) {
+                // Update DB to expired
+                await db
+                    .from("jobs")
+                    .update({ status: "expired" })
+                    .eq("id", job.id)
+
+                console.log(`[Expiry] Job expired: "${job.description}" (id: ${job.id})`)
+
+                // 2. Safely parse the shortlisted array (just like the reaction logic)
+                let rawUsers = job.shortlisted_users;
+                let shortlistedUsers = [];
         
-        if (expireAt < now) {
-            await db
-                .from("jobs")
-                .update({ status: "expired" })
-                .eq("id", job.id)
+                if (Array.isArray(rawUsers)) {
+                    shortlistedUsers = rawUsers;
+                } else if (typeof rawUsers === "string" && rawUsers.trim() !== "") {
+                    try {
+                        const parsed = JSON.parse(rawUsers);
+                        shortlistedUsers = Array.isArray(parsed) ? parsed : [rawUsers];
+                    } catch (e) {
+                        shortlistedUsers = [rawUsers];
+                    }
+                }
 
-            console.log(`[Expiry] Job expired: "${job.description}" (id: ${job.id})`)
-
-            try {
+                // 3. Notify the channel
                 const channel = await client.channels.fetch(job.channel_id)
                 if (channel) {
-                    await channel.send(`⚠️ **Job Expired**\nThe timeframe for "${job.description}" has expired. Awaiting admin approval to repost.`)
+                    await channel.send(
+                        `⚠️ **Job Expired**\nThe timeframe for "${job.description}" has expired.\n` +
+                        `${shortlistedUsers.length} candidate(s) were shortlisted. Awaiting admin review.`
+                    )
                 }
-            } catch (err) {
-                console.error(`[Expiry] Failed to notify channel for job ${job.id}:`, err)
             }
+        } catch (err) {
+            // This prevents a single bad job from breaking the rest of the loop!
+            console.error(`[Expiry Error] Failed processing job ${job.id}:`, err)
         }
     }
 }, 60000)
 
-// Login
 
+// Login
 client.login(process.env.DISCORD_BOT_TOKEN)
