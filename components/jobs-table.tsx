@@ -43,16 +43,18 @@ function formatDate(iso: string) {
 
 // Self-contained shortlist modal — no extra shadcn dependency needed
 function ShortlistModal({ 
-  job, onClose, onAssign, jobs 
+  job, onClose, onAssign, onAction, jobs 
   }: { 
     job: Job; 
     onClose: () => void, 
     onAssign: (jobId: string, candidateInfo: string) => void,
+    onAction: (action: "complete" | "cancel", jobId: string, candidateInfo: string) => void,
     jobs: Job[]
   }) {
   const users = job.shortlistedUsers ?? [];
   const limit = job.shortlistLimit ?? 10;
   const [assigningUser, setAssigningUser] = useState<string | null>(null);
+  const [confirmingAction, setConfirmingAction] = useState<{type: string, userId: string} | null>(null);
 
   const getAssignedCount = (candidateStr: string) => {
     const match = candidateStr.match(/\((\d+)\)$/);
@@ -117,20 +119,61 @@ function ShortlistModal({
                   </div>
                 </div>
 
-                {job.status !== "assigned" && (
-                  <Button
-                    variant="default"
-                    size="sm"
-                    className="h-7 text-xs cursor-pointer"
-                    disabled={!!assigningUser}
-                    onClick={() => handleAssignClick(userId)}
-                  >
-                    {assigningUser === userId ? (
-                      <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                    ) : null}
-                    Assign
-                  </Button>
-                )}
+                <div className="flex gap-2">
+                  {/* Assign Job Button */}
+                  {job.status !== "assigned" && confirmingAction?.userId !== userId && (
+                    <Button
+                      variant="default"
+                      size="sm"
+                      className="h-7 text-xs cursor-pointer"
+                      onClick={() => setConfirmingAction({type: "assign", userId})}
+                    >
+                      {assigningUser === userId ? (
+                        <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                      ) : null}
+                      Assign
+                    </Button>
+                  )}
+
+                  {/* Assign Job Showing Complete and Cancel Button */}
+                  {job.status === "assigned" && job.assignedUserId && userId.includes(`(${job.assignedUserId})`) && confirmingAction?.userId !== userId && (
+                    <>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="h-7 text-xs border-red-200 text-red-600 hover:bg-red-50" 
+                        onClick={() => setConfirmingAction({ type: "cancel", userId })}
+                      >
+                        Cancel
+                      </Button>
+                      <Button 
+                        variant="default" 
+                        size="sm" 
+                        className="h-7 text-xs bg-green-600 hover:bg-green-700" 
+                        onClick={() => setConfirmingAction({ type: "complete", userId })}
+                      >
+                        Complete
+                      </Button>
+                    </>
+                  )}
+
+                  {/* Confirmation Dialog */}
+                  {confirmingAction?.userId === userId && (
+                    <div className="flex items-center gap-2 bg-muted p-1 rounded border shadow-sm">
+                      <span className="text-[10px] font-bold px-1 whitespace-nowrap">Are you sure?</span>
+                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:bg-white" onClick={() => setConfirmingAction(null)}>
+                        <X className="h-4 w-4" />
+                      </Button>
+                      <Button variant="default" size="sm" className="h-6 px-2 text-[10px]" disabled={!!assigningUser} onClick={() => {
+                        if (confirmingAction.type === "assign") handleAssignClick(userId);
+                        if (confirmingAction.type === "cancel") onAction("cancel", job.id, userId);
+                        if (confirmingAction.type === "complete") onAction("complete", job.id, userId);
+                      }}>
+                        {assigningUser === userId ? <Loader2 className="h-3 w-3 animate-spin" /> : "Yes"}
+                      </Button>
+                    </div>
+                  )}
+                </div>
               </li>
             ))}
           </ul>
@@ -183,6 +226,23 @@ export function JobsTable({ jobs, isLoading }: JobsTableProps) {
   const paginatedJobs = sortedJobs.slice(
     (currentPage - 1) * itemsPerPage, currentPage * itemsPerPage
   );
+
+  const handleAction = async (action: "complete" | "cancel", jobId: string, candidateInfo: string) => {
+    try {
+      const response = await fetch(`/api/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId, candidateInfo }),
+      });
+
+      if (!response.ok) throw new Error(`Failed to ${action} job`);
+      toast.success(action === "complete" ? "Job marked as completed!" : "Assignment cancelled!");
+      setShortlistJob(null);
+      router.refresh();
+    } catch (error) {
+      toast.error(`Failed to ${action} job. Please try again.`);
+    }
+  };
 
   const handleAssign = async (jobId: string, candidate: string) => {
     try {
@@ -237,7 +297,7 @@ export function JobsTable({ jobs, isLoading }: JobsTableProps) {
     <>
       {/* Shortlist Modal */}
       {shortlistJob && (
-        <ShortlistModal job={shortlistJob} onClose={() => setShortlistJob(null)} onAssign={handleAssign} jobs={jobs} />
+        <ShortlistModal job={shortlistJob} onClose={() => setShortlistJob(null)} onAssign={handleAssign} onAction={handleAction} jobs={jobs} />
       )}
 
       <Card>
@@ -253,7 +313,7 @@ export function JobsTable({ jobs, isLoading }: JobsTableProps) {
                   setActiveTab(tab);
                   setCurrentPage(1);
                 }}
-                className={`capitalize px-4 py-1.5 text-sm font-medium rounded-md transition-all ${
+                className={`capitalize px-4 py-1.5 text-sm font-medium rounded-md transition-all cursor-pointer ${
                   activeTab === tab ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
                 }`}
               >

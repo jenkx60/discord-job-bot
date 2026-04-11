@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
@@ -13,20 +13,41 @@ import { Textarea } from "@/components/ui/textarea";
 export function JobForm() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [channels, setChannels] = useState<{id: string, name: string}[]>([]);
+  const [loadingChannels, setLoadingChannels] = useState(true);
   const [formData, setFormData] = useState({
     description: "",
-    reactionEmoji: "👍",
+    reactionEmoji: "",
     timeWindowMinutes: 0,
     discordChannelId: "",
   });
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     setFormData((prev) => ({
       ...prev,
       [name]: type === "number" ? Number(value) : value,
     }));
   };
+
+  useEffect(() => {
+    async function fetchChannels() {
+      try {
+        const res = await fetch("/api/channels");
+        const data = await res.json();
+        if (data.success && data.channels) {
+          setChannels(data.channels);
+        } else {
+          toast.error("Failed to load discord channels.");
+        }
+      } catch (error) {
+        console.error("Error fetching channels:", error);
+      } finally {
+        setLoadingChannels(false);
+      }
+    }
+    fetchChannels();
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,12 +57,20 @@ export function JobForm() {
       // Calculate expiration timestamp
       const expireAt = new Date(Date.now() + Number(formData.timeWindowMinutes) * 60000).toISOString();
 
+      // Randomize emoji
+      let finalEmoji = formData.reactionEmoji;
+      if (finalEmoji === "") {
+        const emojis = ["👍", "🚀", "💼", "🔥", "✅", "👀", "👨‍💻", "👋"];
+        finalEmoji = emojis[Math.floor(Math.random() * emojis.length)];
+      }
+
+
       const res = await fetch("/api/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           description: formData.description,
-          emoji: formData.reactionEmoji,
+          emoji: finalEmoji,
           channel: formData.discordChannelId,
           expire_at: expireAt,
         }),
@@ -55,7 +84,7 @@ export function JobForm() {
       toast.success("Job posted successfully!");
       setFormData({
         description: "",
-        reactionEmoji: "👍",
+        reactionEmoji: "",
         timeWindowMinutes: 0,
         discordChannelId: "",
       });
@@ -95,30 +124,49 @@ export function JobForm() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <label htmlFor="discordChannelId" className="text-sm font-medium leading-none">
-                Discord Channel ID
+                Discord Channel
               </label>
-              <Input
+              <select
                 id="discordChannelId"
                 name="discordChannelId"
-                placeholder="123456789012345678"
                 value={formData.discordChannelId}
                 onChange={handleChange}
                 required
-              />
+                disabled={loadingChannels}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <option value="" disabled>
+                  {loadingChannels ? "Loading channels..." : "Select a channel..."}
+                </option>
+                {channels.map((ch) => (
+                  <option key={ch.id} value={ch.id}>
+                    # {ch.name}
+                  </option>
+                ))}
+              </select>
             </div>
             
             <div className="space-y-2">
               <label htmlFor="reactionEmoji" className="text-sm font-medium leading-none">
                 Reaction Emoji
               </label>
-              <Input
+              <select
                 id="reactionEmoji"
                 name="reactionEmoji"
-                placeholder="👍"
                 value={formData.reactionEmoji}
                 onChange={handleChange}
-                required
-              />
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <option value="" disabled>Select an emoji...</option>
+                <option value="👍">👍 Thumbs Up</option>
+                <option value="🚀">🚀 Rocket</option>
+                <option value="💼">💼 Briefcase</option>
+                <option value="🔥">🔥 Fire</option>
+                <option value="✅">✅ Checkmark</option>
+                <option value="👀">👀 Eyes</option>
+                <option value="👨‍💻">👨‍💻 Coder</option>
+                <option value="👋">👋 Wave</option>
+              </select>
             </div>
             
             <div className="space-y-2">
@@ -132,7 +180,7 @@ export function JobForm() {
                 min={1}
                 value={formData.timeWindowMinutes}
                 onChange={handleChange}
-                required
+                // required
               />
             </div>
           </div>
