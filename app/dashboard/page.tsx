@@ -1,4 +1,4 @@
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { listJobs, listMetrics } from "@/lib/db/jobs";
 import { JobForm } from "@/components/job-form";
 import { JobsTable, Job } from "@/components/jobs-table";
 import { Briefcase, Clock, UserCheck, CheckCircle } from "lucide-react";
@@ -7,10 +7,7 @@ import { CandidateLeaderboard } from "@/components/candidate-leaderboard";
 export const revalidate = 0;
 
 export default async function DashboardPage() {
-    const { data } = await supabaseAdmin
-        .from("jobs")
-        .select("*")
-        .order("id", { ascending: false });
+    const data = listJobs();
 
     const jobs: Job[] = (data || []).map((row: Record<string, any>) => ({
         id: row.id as string,
@@ -67,10 +64,7 @@ export default async function DashboardPage() {
         },
     ];
 
-    const { data: metrics } = await supabaseAdmin
-        .from("candidate_metrics")
-        .select("*")
-        .order("completed_count", { ascending: false });
+    const metrics = listMetrics();
 
     return (
         <>

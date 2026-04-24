@@ -1,6 +1,4 @@
-/* eslint-disable @typescript-eslint/no-require-imports */
-const { Client, GatewayIntentBits } = require("discord.js")
-const { supabaseAdmin } = require("../lib/supabaseAdmin")
+import { Client, GatewayIntentBits } from "discord.js";
 
 const client = new Client({
     intents: [
@@ -8,11 +6,11 @@ const client = new Client({
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.GuildMessageReactions,
         GatewayIntentBits.MessageContent,
-    ]
-})
+    ],
+});
 
-
-// Ready event to confirm the bot is online
 client.once("ready", () => {
     console.log(`[discordBot] Managed sub-client ready as ${client.user.tag}`);
 });
+
+export default client;

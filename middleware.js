@@ -1,38 +1,35 @@
-import { createServerClient } from '@supabase/ssr'
-import { NextResponse } from 'next/server'
+import { NextResponse } from "next/server";
+import { AUTH_COOKIE_NAME, verifySessionToken } from "@/lib/auth/session";
+
 export async function middleware(request) {
-    let supabaseResponse = NextResponse.next({ request })
+    const pathname = request.nextUrl.pathname;
+    const token = request.cookies.get(AUTH_COOKIE_NAME)?.value;
+    const session = token ? await verifySessionToken(token) : null;
+    const isAuthed = Boolean(session?.sub);
 
-    const supabase = createServerClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-        {
-            cookies: {
-                getAll() { return request.cookies.getAll() },
-                setAll(cookiesToSet) {
-                    cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
-                    supabaseResponse = NextResponse.next({ request })
-                    cookiesToSet.forEach(({ name, value, options }) => 
-                        supabaseResponse.cookies.set(name, value, options)
-                    )
-                },
-            },
+    const isAuthApi = pathname.startsWith("/api/auth/");
+    const isProtectedApi = pathname.startsWith("/api/") && !isAuthApi;
+    const isDashboard = pathname.startsWith("/dashboard");
+    const isLoginPage = pathname === "/login";
+
+    if (!isAuthed && (isDashboard || isProtectedApi)) {
+        if (isProtectedApi) {
+            return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
         }
-    )
-
-    //Refresh session
-    const { data: { user } } = await supabase.auth.getUser()
-
-    //if user is not logged in and trying to access protected routes, redirect to login
-    if (!user && !request.nextUrl.pathname.startsWith('/login')) {
-        const url = request.nextUrl.clone()
-        url.pathname = '/login'
-        return NextResponse.redirect(url)
+        const url = request.nextUrl.clone();
+        url.pathname = "/login";
+        return NextResponse.redirect(url);
     }
 
-    return supabaseResponse
+    if (isAuthed && isLoginPage) {
+        const url = request.nextUrl.clone();
+        url.pathname = "/dashboard";
+        return NextResponse.redirect(url);
+    }
+
+    return NextResponse.next();
 }
 
 export const config = {
-    matcher: ['/dashboard/:path*', '/api/:path*'],
-}
+    matcher: ["/dashboard/:path*", "/api/:path*", "/login"],
+};

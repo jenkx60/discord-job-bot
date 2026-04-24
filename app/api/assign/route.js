@@ -1,8 +1,8 @@
-import { supabaseAdmin } from "@/lib/supabaseAdmin"
+import { updateJob } from "@/lib/db/jobs";
 
 async function sendDiscordAssignmentNotification({ userId, title, description }) {
-    const botToken = process.env.DISCORD_BOT_TOKEN
-    if (!botToken || !userId) return false
+    const botToken = process.env.DISCORD_BOT_TOKEN;
+    if (!botToken || !userId) return false;
 
     const dmChannelResponse = await fetch("https://discord.com/api/v10/users/@me/channels", {
         method: "POST",
@@ -11,41 +11,43 @@ async function sendDiscordAssignmentNotification({ userId, title, description })
             "Content-Type": "application/json",
         },
         body: JSON.stringify({ recipient_id: userId }),
-    })
+    });
 
-    if (!dmChannelResponse.ok) {
-        return false
-    }
+    if (!dmChannelResponse.ok) return false;
 
-    const dmChannel = await dmChannelResponse.json()
-    if (!dmChannel?.id) return false
+    const dmChannel = await dmChannelResponse.json();
+    if (!dmChannel?.id) return false;
 
-    const messageResponse = await fetch(`https://discord.com/api/v10/channels/${dmChannel.id}/messages`, {
-        method: "POST",
-        headers: {
-            Authorization: `Bot ${botToken}`,
-            "Content-Type": "application/json",
+    const messageResponse = await fetch(
+        `https://discord.com/api/v10/channels/${dmChannel.id}/messages`,
+        {
+            method: "POST",
+            headers: {
+                Authorization: `Bot ${botToken}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                content: `✅ You have been assigned to a job${title?.trim() ? `: **${title.trim()}**` : ""}:\n\n${description}\n\nPlease get started and reach out to the admin if you need clarification.`,
+            }),
         },
-        body: JSON.stringify({
-            content: `✅ You have been assigned to a job${title?.trim() ? `: **${title.trim()}**` : ""}:\n\n${description}\n\nPlease get started and reach out to the admin if you need clarification.`,
-        }),
-    })
+    );
 
-    return messageResponse.ok
+    return messageResponse.ok;
 }
 
 export async function POST(request) {
     try {
-        const body = await request.json()
-        const { jobId, candidateInfo } = body
+        const body = await request.json();
+        const { jobId, candidateInfo } = body;
 
         if (!jobId || !candidateInfo) {
-            return Response.json({ success: false, error: "Missing jobId or candidateInfo" }, { status: 400 })
+            return Response.json(
+                { success: false, error: "Missing jobId or candidateInfo" },
+                { status: 400 },
+            );
         }
 
-        // candidateInfo = "jenkins7904 (123456789012345678)"
-        // extract username and id
-        const match = candidateInfo.match(/(.+) \((\d+)\)/)
+        const match = candidateInfo.match(/(.+) \((\d+)\)/);
         let assignedUsername = candidateInfo;
         let assignedUserId = null;
 
@@ -54,32 +56,26 @@ export async function POST(request) {
             assignedUserId = match[2].trim();
         }
 
-        // Update the job in supabase
-        const { data, error } = await supabaseAdmin
-            .from("jobs")
-            .update({ assigned_user: assignedUsername, assigned_user_id: assignedUserId, status: "assigned" })
-            .eq("id", jobId)
-            .select()
-            .single()
+        const data = updateJob(jobId, {
+            assigned_user: assignedUsername,
+            assigned_user_id: assignedUserId,
+            status: "assigned",
+        });
 
-        if (error) {
-            throw error
-        }
-
-        let notificationSent = false
+        let notificationSent = false;
         try {
             notificationSent = await sendDiscordAssignmentNotification({
                 userId: assignedUserId,
                 title: data?.title ?? "",
                 description: data?.description ?? "New assignment",
-            })
+            });
         } catch (notificationError) {
-            console.error("Failed to notify assigned user:", notificationError)
+            console.error("Failed to notify assigned user:", notificationError);
         }
 
-        return Response.json({ success: true, job: data, notificationSent })
+        return Response.json({ success: true, job: data, notificationSent });
     } catch (error) {
-        console.error("Error assigning job:", error)
-        return Response.json({ success: false, error: error.message }, { status: 500 })
+        console.error("Error assigning job:", error);
+        return Response.json({ success: false, error: error.message }, { status: 500 });
     }
 }

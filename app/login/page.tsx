@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
 import { Eye, EyeOff, Bot, Shield, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -23,17 +22,29 @@ export default function LoginPage() {
         setLoading(true);
         setError("");
 
-        const supabase = createClient();
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        try {
+            const response = await fetch("/api/auth/login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    email: email.trim(),
+                    password,
+                }),
+            });
+            const data = await response.json().catch(() => ({}));
 
-        if (error) {
-            setError("Invalid email or password. Please try again.");
+            if (!response.ok || !data.success) {
+                setError(data.error || "Invalid email or password. Please try again.");
+                return;
+            }
+
+            router.push("/dashboard");
+            router.refresh();
+        } catch {
+            setError("Unable to sign in right now. Please try again.");
+        } finally {
             setLoading(false);
-            return;
         }
-
-        router.push("/dashboard");
-        router.refresh();
     };
 
     const emailActive = emailFocused || email.length > 0;
